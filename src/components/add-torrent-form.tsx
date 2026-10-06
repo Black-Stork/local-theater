@@ -30,8 +30,9 @@ export function AddTorrentForm({
   function takeTorrentFile(next: File | null) {
     if (!next) return;
     const name = next.name.toLowerCase();
+    // Prefer extension: iOS often leaves File.type empty or octet-stream.
     if (!name.endsWith(".torrent") && next.type !== "application/x-bittorrent") {
-      setError("Drop a .torrent file");
+      setError("Choose a .torrent file");
       return;
     }
     setFile(next);
@@ -91,10 +92,14 @@ export function AddTorrentForm({
 
       <div className="space-y-2">
         <Label>.torrent file</Label>
+        {/*
+          No accept= filter: iOS has no UTI for .torrent, so
+          accept=".torrent,application/x-bittorrent" greys the file out
+          in the Files picker. Validate the extension in takeTorrentFile.
+        */}
         <input
           ref={inputRef}
           type="file"
-          accept=".torrent,application/x-bittorrent"
           className="sr-only"
           onChange={(e) => takeTorrentFile(e.target.files?.[0] ?? null)}
         />
