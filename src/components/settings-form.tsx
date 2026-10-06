@@ -6,6 +6,7 @@ import { useTheme, type AccentTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { bytesToKbInput, kbToBytes } from "@/lib/speed-format";
 
 export function SettingsForm({
   initial,
@@ -13,6 +14,8 @@ export function SettingsForm({
   initial: {
     downloadRoot: string;
     uploadLimit: string;
+    downloadLimit: string;
+    speedUnlimited: string;
     theme: string;
     scanCron: string;
     lastScanAt: string;
@@ -20,7 +23,11 @@ export function SettingsForm({
 }) {
   const { theme, setTheme } = useTheme();
   const [downloadRoot, setDownloadRoot] = useState(initial.downloadRoot);
-  const [uploadLimit, setUploadLimit] = useState(initial.uploadLimit);
+  const [unlimited, setUnlimited] = useState(initial.speedUnlimited === "1");
+  const [uploadKb, setUploadKb] = useState(bytesToKbInput(initial.uploadLimit));
+  const [downloadKb, setDownloadKb] = useState(
+    bytesToKbInput(initial.downloadLimit),
+  );
   const [scanCron, setScanCron] = useState(initial.scanCron || "* * * * *");
   const [lastScanAt, setLastScanAt] = useState(initial.lastScanAt);
   const [message, setMessage] = useState<string | null>(null);
@@ -34,16 +41,35 @@ export function SettingsForm({
     setMessage(null);
     setError(null);
     try {
+      const uploadLimit = unlimited
+        ? "-1"
+        : kbToBytes(uploadKb === "" ? "0" : uploadKb);
+      const downloadLimit = unlimited
+        ? "-1"
+        : downloadKb === ""
+          ? "-1"
+          : kbToBytes(downloadKb);
+
       const res = await fetch("/api/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ downloadRoot, uploadLimit, theme, scanCron }),
+        body: JSON.stringify({
+          downloadRoot,
+          uploadLimit,
+          downloadLimit,
+          speedUnlimited: unlimited ? "1" : "0",
+          theme,
+          scanCron,
+        }),
       });
       if (!res.ok) throw new Error("Failed to save settings");
-      const data = (await res.json()) as { lastScanAt?: string; scanCron?: string };
+      const data = (await res.json()) as {
+        lastScanAt?: string;
+        scanCron?: string;
+      };
       if (data.scanCron) setScanCron(data.scanCron);
       if (data.lastScanAt) setLastScanAt(data.lastScanAt);
-      setMessage("Saved");
+      setMessage("Saved — speed limits applied to active downloads");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
@@ -85,19 +111,55 @@ export function SettingsForm({
         </p>
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="uploadLimit">Upload limit (bytes/sec)</Label>
-        <Input
-          id="uploadLimit"
-          type="number"
-          min={0}
-          value={uploadLimit}
-          onChange={(e) => setUploadLimit(e.target.value)}
-          className="border-accent/35 font-mono"
-        />
-        <p className="text-xs text-muted-foreground">
-          Use <span className="font-mono text-accent">0</span> for no upload.
-        </p>
+      <div className="space-y-3 rounded-2xl border border-accent/30 bg-card/50 p-4">
+        <label className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">Unlimited speeds</p>
+            <p className="text-xs text-muted-foreground">
+              When on, upload and download have no caps
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            checked={unlimited}
+            onChange={(e) => setUnlimited(e.target.checked)}
+            className="size-5 accent-[var(--accent)]"
+          />
+        </label>
+
+        {!unlimited ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="uploadKb">Upload (KB/s)</Label>
+              <Input
+                id="uploadKb"
+                type="number"
+                min={0}
+                value={uploadKb}
+                onChange={(e) => setUploadKb(e.target.value)}
+                className="border-accent/35 font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                <span className="font-mono text-accent">0</span> = no upload
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="downloadKb">Download (KB/s)</Label>
+              <Input
+                id="downloadKb"
+                type="number"
+                min={0}
+                value={downloadKb}
+                onChange={(e) => setDownloadKb(e.target.value)}
+                placeholder="unlimited"
+                className="border-accent/35 font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Empty = unlimited download
+              </p>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="space-y-2">
@@ -110,7 +172,7 @@ export function SettingsForm({
           placeholder="* * * * *"
         />
         <p className="text-xs text-muted-foreground">
-          Standard 5-field cron. Default <span className="font-mono text-accent">* * * * *</span> = every minute.
+          Default <span className="font-mono text-accent">* * * * *</span> = every minute.
           {lastScanAt ? (
             <>
               {" "}

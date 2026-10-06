@@ -21,6 +21,16 @@ On your phone: `http://<your-mac-lan-ip>:7887`
 - Theme: Ember (orange). Switch to Signal (mint) in Settings.
 - Folder scanner: `node-cron` every minute (`* * * * *`), configurable in Settings
 
+## PWA
+
+Installable as a home-screen app (standalone display):
+
+- Manifest: `/manifest.webmanifest`
+- Icons: `public/icons/`
+- Minimal service worker: `public/sw.js` (network-only; does not cache API/media)
+
+**Note:** On a phone over plain `http://192.168.x.x`, iOS “Add to Home Screen” usually works. Android Chrome’s Install prompt often requires **HTTPS** (or `localhost`). For LAN HTTPS later, put a reverse proxy (Caddy/nginx) in front.
+
 ## Stack
 
-Next.js · SQLite (`node:sqlite`) · WebTorrent · node-cron · shadcn/ui · Tailwind
+Next.js · SQLite (`node:sqlite`) · WebTorrent · node-cron · shadcn/ui · Tailwind · PWA

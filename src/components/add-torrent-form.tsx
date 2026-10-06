@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -8,8 +7,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { Category } from "@/lib/db/schema";
 
-export function AddTorrentForm({ categories }: { categories: Category[] }) {
-  const router = useRouter();
+export function AddTorrentForm({
+  categories,
+  onSuccess,
+}: {
+  categories: Category[];
+  onSuccess?: () => void;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "");
   const [magnet, setMagnet] = useState("");
@@ -49,8 +53,9 @@ export function AddTorrentForm({ categories }: { categories: Category[] }) {
       const res = await fetch("/api/torrents", { method: "POST", body: form });
       const data = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(data.error || "Failed to add torrent");
-      router.push("/");
-      router.refresh();
+      setFile(null);
+      setMagnet("");
+      onSuccess?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add torrent");
     } finally {

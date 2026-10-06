@@ -1,20 +1,26 @@
 import { AppShell } from "@/components/app-shell";
-import { QueueClient } from "@/components/queue-client";
-import { getTorrentManager } from "@/lib/torrent-manager";
+import { CatalogClient } from "@/components/catalog-client";
+import { listCategories } from "@/lib/db";
+import { listCatalog } from "@/lib/library";
 
 export const dynamic = "force-dynamic";
 
 export default function HomePage() {
-  const torrents = JSON.parse(
-    JSON.stringify(getTorrentManager().list()),
-  ) as ReturnType<ReturnType<typeof getTorrentManager>["list"]>;
+  const categories = listCategories().map((c) => ({ id: c.id, name: c.name }));
+  const items = listCatalog().map((item) => ({
+    id: item.id,
+    name: item.name,
+    categoryId: item.categoryId,
+    categoryName: item.categoryName,
+    total: item.total,
+    playable: item.playable,
+    videoCount: item.videoCount,
+    kind: item.kind,
+  }));
 
   return (
-    <AppShell
-      title="Queue"
-      subtitle="Live downloads on your local network"
-    >
-      <QueueClient initial={torrents} />
+    <AppShell title="Catalog" subtitle="Pick something to watch">
+      <CatalogClient initial={items} categories={categories} />
     </AppShell>
   );
 }

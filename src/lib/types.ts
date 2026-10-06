@@ -1,3 +1,5 @@
+import type { ConnectedPeerView } from "@/lib/torrent-peers";
+
 export type TorrentView = {
   id: string;
   name: string;
@@ -9,8 +11,17 @@ export type TorrentView = {
   uploadSpeed: number;
   downloaded: number;
   total: number;
+  /** Active BitTorrent connections right now (not total swarm size). */
   peers: number;
+  /** Seeds reported by the last tracker announce, when available. */
+  swarmSeeds: number | null;
+  /** Leechers reported by the last tracker announce, when available. */
+  swarmLeechers: number | null;
+  connectedPeers: ConnectedPeerView[];
+  /** Final ReadySHARE / category folder. */
   savePath: string;
+  /** Local Mac path while downloading (null when finished / not staging). */
+  stagingPath: string | null;
   magnet: string | null;
   error: string | null;
   createdAt: Date | string;

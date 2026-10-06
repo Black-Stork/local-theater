@@ -1,3 +1,4 @@
+import "server-only";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,7 +9,9 @@ const DEFAULT_DOWNLOAD_ROOT = "/Volumes/9D41DB26/Downloads";
 
 export const DEFAULT_SETTINGS = {
   downloadRoot: DEFAULT_DOWNLOAD_ROOT,
-  uploadLimit: "0",
+  uploadLimit: "-1",
+  downloadLimit: "-1",
+  speedUnlimited: "1",
   theme: "ember",
   scanCron: "* * * * *",
   lastScanAt: "",
@@ -58,6 +61,14 @@ function migrate(sqlite: DatabaseSync) {
       FOREIGN KEY (category_id) REFERENCES categories(id)
     );
   `);
+
+  // Older builds defaulted to upload cap 0, which chokes reciprocation and slows downloads.
+  sqlite
+    .prepare(
+      `UPDATE settings SET value = '-1'
+       WHERE key = 'uploadLimit' AND value = '0'`,
+    )
+    .run();
 }
 
 function seed(sqlite: DatabaseSync) {

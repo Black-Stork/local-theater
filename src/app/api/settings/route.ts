@@ -16,6 +16,8 @@ export async function PATCH(request: Request) {
   const allowed = [
     "downloadRoot",
     "uploadLimit",
+    "downloadLimit",
+    "speedUnlimited",
     "theme",
     "scanCron",
   ] as const;
@@ -26,12 +28,7 @@ export async function PATCH(request: Request) {
     }
   }
 
-  if (typeof body.uploadLimit === "string") {
-    const limit = Number(body.uploadLimit);
-    if (Number.isFinite(limit)) {
-      await getTorrentManager().applyUploadLimit(limit);
-    }
-  }
+  await getTorrentManager().applySpeedLimits();
 
   if (typeof body.scanCron === "string") {
     startScanCron(body.scanCron);

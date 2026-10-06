@@ -14,8 +14,10 @@ export function formatSpeed(bytesPerSec: number) {
 }
 
 export function formatEta(downloaded: number, total: number, speed: number) {
-  if (!total || !speed || downloaded >= total) return "—";
+  if (!total || downloaded >= total) return "—";
+  if (!speed || speed < 2048) return "stalled";
   const seconds = Math.round((total - downloaded) / speed);
+  if (seconds > 86400 * 7) return "stalled";
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   const hours = Math.floor(seconds / 3600);

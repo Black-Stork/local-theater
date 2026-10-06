@@ -1,19 +1,23 @@
 "use client";
 
-import { FolderPlus, Home, Plus, Settings } from "lucide-react";
+import { Clapperboard, Download, FolderPlus, Settings } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const items = [
-  { href: "/", label: "Queue", icon: Home },
-  { href: "/add", label: "Add", icon: Plus },
+  { href: "/", label: "Watch", icon: Clapperboard },
+  { href: "/queue", label: "Queue", icon: Download },
   { href: "/categories", label: "Cats", icon: FolderPlus },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function MobileNav() {
   const pathname = usePathname();
+
+  if (pathname.startsWith("/watch/") || pathname.startsWith("/browse/")) {
+    return null;
+  }
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-accent/40 bg-background/95 backdrop-blur-md">

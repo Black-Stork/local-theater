@@ -1,3 +1,4 @@
+import "server-only";
 import cron, { type ScheduledTask } from "node-cron";
 import { getSetting, setSetting } from "@/lib/db";
 import { scanDownloadFolders } from "@/lib/scanner";

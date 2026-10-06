@@ -5,6 +5,7 @@ declare module "webtorrent" {
   }
 
   export interface Torrent {
+    destroyed?: boolean;
     infoHash: string;
     name: string;
     length: number;
@@ -22,13 +23,32 @@ declare module "webtorrent" {
 
   export interface WebTorrentOptions {
     maxConns?: number;
+    torrentPort?: number;
+    dhtPort?: number;
+    dht?: boolean | Record<string, unknown>;
+    tracker?: boolean | Record<string, unknown>;
+    lsd?: boolean;
+    utPex?: boolean;
+    natUpnp?: boolean | "permanent";
+    natPmp?: boolean;
+    utp?: boolean;
+    webSeeds?: boolean;
+    seedOutgoingConnections?: boolean;
+    secure?: number;
+    /** bytes/sec, -1 = unlimited */
     uploadLimit?: number;
+    /** bytes/sec, -1 = unlimited */
     downloadLimit?: number;
   }
 
   export interface AddOptions {
     path?: string;
-    strategy?: string;
+    strategy?: "rarest" | "sequential";
+    storeCacheSlots?: number;
+    maxWebConns?: number;
+    noPeersIntervalTime?: number;
+    uploads?: number;
+    announce?: string[];
   }
 
   export default class WebTorrent {
@@ -38,7 +58,7 @@ declare module "webtorrent" {
       opts?: AddOptions,
       callback?: (torrent: Torrent) => void,
     ): Torrent;
-    get(torrentId: string): Torrent | void;
+    get(torrentId: string): Promise<Torrent | null> | Torrent | void;
     remove(
       torrentId: string,
       opts?: { destroyStore?: boolean },

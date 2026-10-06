@@ -92,7 +92,7 @@ export function GlobalDropZone() {
       const data = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(data.error || "Failed to add torrent");
       setFile(null);
-      router.push("/");
+      router.push("/queue");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add torrent");
