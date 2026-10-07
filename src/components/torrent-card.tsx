@@ -41,7 +41,10 @@ export function TorrentCard({
   const pct = Math.round(torrent.progress * 1000) / 10;
   const canControl = CONTROLLABLE.has(torrent.status);
   const isRunning = torrent.status === "downloading" || torrent.status === "queued";
-  const connCount = torrent.connectedPeers.length || torrent.peers;
+  // Paused and finished items are off the swarm — no live transfer to show.
+  const connCount = isRunning
+    ? torrent.connectedPeers.length || torrent.peers
+    : 0;
 
   return (
     <Card className="border-accent/35 bg-card/80 shadow-none transition-transform active:scale-[0.99]">
@@ -118,32 +121,38 @@ export function TorrentCard({
           <Progress value={pct} className="h-2 bg-muted" />
         </div>
 
-        <div className="grid grid-cols-3 gap-2 font-mono text-[11px] text-muted-foreground">
-          <div>
-            <p className="uppercase tracking-wide opacity-70">Down</p>
-            <p className="text-foreground">{formatSpeed(torrent.downloadSpeed)}</p>
-          </div>
-          <div>
-            <p className="uppercase tracking-wide opacity-70">Up</p>
-            <p className="text-foreground">{formatSpeed(torrent.uploadSpeed)}</p>
-          </div>
-          <div>
-            <p className="uppercase tracking-wide opacity-70">ETA · Conn</p>
-            <p className="text-foreground">
-              {formatEta(
-                torrent.downloaded,
-                torrent.total,
-                torrent.downloadSpeed,
-              )}{" "}
-              · {connCount}
-            </p>
-            {torrent.swarmSeeds != null && torrent.swarmLeechers != null ? (
-              <p className="mt-0.5 text-[10px] opacity-80">
-                Swarm {torrent.swarmSeeds}↑ {torrent.swarmLeechers}↓
+        {isRunning ? (
+          <div className="grid grid-cols-3 gap-2 font-mono text-[11px] text-muted-foreground">
+            <div>
+              <p className="uppercase tracking-wide opacity-70">Down</p>
+              <p className="text-foreground">
+                {formatSpeed(torrent.downloadSpeed)}
               </p>
-            ) : null}
+            </div>
+            <div>
+              <p className="uppercase tracking-wide opacity-70">Up</p>
+              <p className="text-foreground">
+                {formatSpeed(torrent.uploadSpeed)}
+              </p>
+            </div>
+            <div>
+              <p className="uppercase tracking-wide opacity-70">ETA · Conn</p>
+              <p className="text-foreground">
+                {formatEta(
+                  torrent.downloaded,
+                  torrent.total,
+                  torrent.downloadSpeed,
+                )}{" "}
+                · {connCount}
+              </p>
+              {torrent.swarmSeeds != null && torrent.swarmLeechers != null ? (
+                <p className="mt-0.5 text-[10px] opacity-80">
+                  Swarm {torrent.swarmSeeds}↑ {torrent.swarmLeechers}↓
+                </p>
+              ) : null}
+            </div>
           </div>
-        </div>
+        ) : null}
 
         {connCount > 0 ? (
           <div className="space-y-1.5 rounded-xl border border-border/80 bg-muted/20 px-3 py-2">

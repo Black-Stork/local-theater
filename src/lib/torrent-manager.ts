@@ -70,6 +70,7 @@ class TorrentManager {
   private lastDownloadedBytes = new Map<string, number>();
   private lastDiscoveryKickAt = new Map<string, number>();
   private reconnecting = new Set<string>();
+  private finishing = new Set<string>();
 
   private async ensureClient() {
     if (this.client) return this.client;
@@ -120,18 +121,26 @@ class TorrentManager {
   list(): TorrentView[] {
     const categories = new Map(listCategories().map((c) => [c.id, c.name]));
     return listTorrents().map((torrent) => {
-      const swarm = this.swarmStats.get(torrent.id);
-      const connectedPeers = this.peerSnapshots.get(torrent.id) ?? [];
       const live = this.live.has(torrent.id);
-      const peers = live
-        ? connectedPeers.length
-        : connectedPeers.length || torrent.peers;
-      const active =
+      // Finished, imported and paused items are detached from the swarm, so
+      // there is no peer or tracker data to report for them.
+      const inSwarm =
         live ||
         torrent.status === "downloading" ||
-        torrent.status === "queued" ||
-        torrent.status === "paused";
-      const stagingPath = active ? getStagingPath(torrent.id) : null;
+        torrent.status === "queued";
+      const swarm = inSwarm ? this.swarmStats.get(torrent.id) : undefined;
+      const connectedPeers = inSwarm
+        ? (this.peerSnapshots.get(torrent.id) ?? [])
+        : [];
+      const peers = !inSwarm
+        ? 0
+        : live
+          ? connectedPeers.length
+          : connectedPeers.length || torrent.peers;
+      const stagingPath =
+        inSwarm || torrent.status === "paused"
+          ? getStagingPath(torrent.id)
+          : null;
       return {
         ...torrent,
         peers,
@@ -164,7 +173,13 @@ class TorrentManager {
       const row = getTorrentById(id);
       if (!row || row.status === "paused") return;
 
-      const done = torrent.progress >= 1;
+      // `done` only flips once every piece is verified and written to disk;
+      // `progress` hits 1 earlier, while the last piece is still in flight.
+      if (torrent.done) {
+        this.scheduleFinish(id, torrent);
+        return;
+      }
+
       const connectedPeers = readConnectedPeers(torrent);
       this.peerSnapshots.set(id, connectedPeers);
       const downloadSpeed = torrent.downloadSpeed ?? 0;
@@ -184,12 +199,12 @@ class TorrentManager {
         downloaded,
         total: torrent.length ?? 0,
         peers: connectedPeers.length,
-        status: done ? "done" : "downloading",
+        status: "downloading",
         error: null,
       });
 
       const stalledMs = Date.now() - (this.lastProgressAt.get(id) ?? Date.now());
-      if (!done && downloadSpeed < 8_192) {
+      if (downloadSpeed < 8_192) {
         const lastKick = this.lastDiscoveryKickAt.get(id) ?? 0;
         if (Date.now() - lastKick > 45_000) {
           this.lastDiscoveryKickAt.set(id, Date.now());
@@ -202,11 +217,7 @@ class TorrentManager {
       // Longer grace when peers are connected (choked / hashing / verifying).
       const reconnectAfterMs =
         connectedPeers.length > 0 ? 4 * 60_000 : 2 * 60_000;
-      if (
-        !done &&
-        stalledMs > reconnectAfterMs &&
-        !this.reconnecting.has(id)
-      ) {
+      if (stalledMs > reconnectAfterMs && !this.reconnecting.has(id)) {
         this.lastProgressAt.set(id, Date.now());
         void this.reconnectDownload(id);
       }
@@ -218,25 +229,8 @@ class TorrentManager {
     const timer = setInterval(sync, 1000);
     this.timers.set(id, timer);
 
-    torrent.on("done", async () => {
-      if (!this.live.has(id)) return;
-      const row = getTorrentById(id);
-      if (row) {
-        try {
-          promoteStagingToSavePath(id, row.savePath);
-        } catch (error) {
-          console.error(
-            `[torrent ${id}] promote to save path failed:`,
-            error instanceof Error ? error.message : error,
-          );
-        }
-      }
-      sync();
-      updateTorrent(id, {
-        status: "done",
-        progress: 1,
-        downloadSpeed: 0,
-      });
+    torrent.on("done", () => {
+      this.scheduleFinish(id, torrent);
     });
 
     torrent.on("error", (...args: unknown[]) => {
@@ -268,6 +262,74 @@ class TorrentManager {
     });
     // Metadata may already be ready when wiring a resumed torrent.
     queueMicrotask(() => this.tuneDiscovery(torrent));
+  }
+
+  /**
+   * Deferred so the caller finishes first: a torrent that is already complete
+   * when it is wired would otherwise be marked done before the add/start that
+   * wired it writes its own "downloading" row.
+   */
+  private scheduleFinish(id: string, torrent: TorrentInstance) {
+    queueMicrotask(() => void this.finishDownload(id, torrent));
+  }
+
+  /**
+   * The payload is complete: move it to its category folder, write the final
+   * row, then leave the swarm. Nothing is polled or announced afterwards — a
+   * finished item is just a file on disk.
+   */
+  private async finishDownload(id: string, torrent: TorrentInstance) {
+    if (!this.live.has(id) || this.finishing.has(id)) return;
+    this.finishing.add(id);
+
+    const timer = this.timers.get(id);
+    if (timer) {
+      clearInterval(timer);
+      this.timers.delete(id);
+    }
+    this.live.delete(id);
+
+    try {
+      const row = getTorrentById(id);
+      if (row) {
+        try {
+          promoteStagingToSavePath(id, row.savePath);
+        } catch (error) {
+          console.error(
+            `[torrent ${id}] promote to save path failed:`,
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+
+      const total = torrent.length || row?.total || 0;
+      updateTorrent(id, {
+        name: torrent.name || row?.name || "Torrent",
+        infoHash: torrent.infoHash
+          ? String(torrent.infoHash)
+          : (row?.infoHash ?? null),
+        status: "done",
+        progress: 1,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        downloaded: total || (torrent.downloaded ?? 0),
+        total,
+        peers: 0,
+        error: null,
+      });
+
+      this.peerSnapshots.delete(id);
+      this.swarmStats.delete(id);
+      this.lastProgressAt.delete(id);
+      this.lastDownloadedBytes.delete(id);
+      this.lastDiscoveryKickAt.delete(id);
+
+      if (!torrent.destroyed) {
+        await destroyWithTimeout(torrent, false);
+      }
+    } finally {
+      this.finishing.delete(id);
+    }
   }
 
   private tuneDiscovery(torrent: TorrentInstance) {
@@ -667,14 +729,23 @@ function removeClientTorrentWithTimeout(
       resolve();
     };
     const timer = setTimeout(finish, ms);
-    try {
-      client.remove(infoHash, { destroyStore: deleteFiles }, () => {
-        clearTimeout(timer);
-        finish();
-      });
-    } catch {
+    const settle = () => {
       clearTimeout(timer);
       finish();
+    };
+    try {
+      // `remove()` rejects when the client no longer tracks this infoHash,
+      // which is the normal case for a torrent that already left the swarm.
+      const result = client.remove(
+        infoHash,
+        { destroyStore: deleteFiles },
+        settle,
+      ) as Promise<void> | void;
+      if (result && typeof result.catch === "function") {
+        result.catch(settle);
+      }
+    } catch {
+      settle();
     }
   });
 }

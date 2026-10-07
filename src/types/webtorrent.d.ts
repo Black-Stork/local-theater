@@ -6,6 +6,8 @@ declare module "webtorrent" {
 
   export interface Torrent {
     destroyed?: boolean;
+    /** True once every piece is verified and flushed to the store. */
+    done?: boolean;
     infoHash: string;
     name: string;
     length: number;
@@ -63,7 +65,7 @@ declare module "webtorrent" {
       torrentId: string,
       opts?: { destroyStore?: boolean },
       cb?: (err?: Error) => void,
-    ): void;
+    ): Promise<void> | void;
     destroy(cb?: (err?: Error) => void): void;
     throttleUpload(rate: number): void;
     throttleDownload(rate: number): void;
