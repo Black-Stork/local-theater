@@ -29,6 +29,14 @@ async function bootstrapTorrentRuntime() {
   }
 
   for (const row of listTorrents()) {
+    if (row.status === "promoting") {
+      try {
+        await manager.resumePromote(row.id);
+      } catch {
+        // staging already gone or save path unreachable — leave the row
+      }
+      continue;
+    }
     if (row.status !== "downloading" && row.status !== "queued") continue;
     try {
       await manager.start(row.id);

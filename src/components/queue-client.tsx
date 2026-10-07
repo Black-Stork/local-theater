@@ -65,7 +65,10 @@ export function QueueClient({
   }, [refresh]);
 
   const hasRunning = items.some(
-    (item) => item.status === "downloading" || item.status === "queued",
+    (item) =>
+      item.status === "downloading" ||
+      item.status === "queued" ||
+      item.status === "promoting",
   );
 
   useEffect(() => {
