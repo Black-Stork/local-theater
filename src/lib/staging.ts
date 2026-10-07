@@ -145,10 +145,29 @@ async function movePath(
   // Cross-device (local SSD → ReadySHARE): stream so we can report progress.
   const read = fs.createReadStream(from);
   const write = fs.createWriteStream(to);
+  const maxBps = Number(process.env.LOCAL_BAY_PROMOTE_MAX_BPS || 0);
+  let windowStart = Date.now();
+  let windowBytes = 0;
   const counter = new Transform({
     transform(chunk, _enc, cb) {
       onBytes(chunk.length);
-      cb(null, chunk);
+      if (!(maxBps > 0)) {
+        cb(null, chunk);
+        return;
+      }
+      windowBytes += chunk.length;
+      const elapsed = Date.now() - windowStart;
+      const allowed = (maxBps * Math.max(elapsed, 1)) / 1000;
+      if (windowBytes <= allowed) {
+        cb(null, chunk);
+        return;
+      }
+      const waitMs = Math.ceil(((windowBytes - allowed) * 1000) / maxBps);
+      if (elapsed > 1000) {
+        windowStart = Date.now();
+        windowBytes = chunk.length;
+      }
+      setTimeout(() => cb(null, chunk), Math.min(waitMs, 250));
     },
   });
   try {
