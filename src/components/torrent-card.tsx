@@ -17,7 +17,8 @@ const statusLabel: Record<string, string> = {
   queued: "Queued",
   downloading: "Downloading",
   paused: "Paused",
-  done: "Done",
+  promoting: "Copying to ReadySHARE",
+  done: "Ready on ReadySHARE",
   imported: "On disk",
   missing: "Missing",
   error: "Error",
@@ -38,10 +39,25 @@ export function TorrentCard({
   onStop: (id: string) => void;
   busy?: boolean;
 }) {
-  const pct = Math.round(torrent.progress * 1000) / 10;
+  const isPromoting = torrent.status === "promoting";
+  const isRunning =
+    torrent.status === "downloading" || torrent.status === "queued";
   const canControl = CONTROLLABLE.has(torrent.status);
-  const isRunning = torrent.status === "downloading" || torrent.status === "queued";
-  const connCount = torrent.connectedPeers.length || torrent.peers;
+  // Paused and finished items are off the swarm — no live transfer to show.
+  const connCount = isRunning
+    ? torrent.connectedPeers.length || torrent.peers
+    : 0;
+
+  const promoteTotal = torrent.promoteTotal ?? torrent.total;
+  const promoteBytes = torrent.promoteBytes ?? 0;
+  const promoteRatio =
+    promoteTotal > 0 ? Math.min(1, promoteBytes / promoteTotal) : 0;
+
+  const barProgress = isPromoting ? promoteRatio : torrent.progress;
+  const pct = Math.round(barProgress * 1000) / 10;
+  const bytesLabel = isPromoting
+    ? `${formatBytes(promoteBytes)} / ${formatBytes(promoteTotal)}`
+    : `${formatBytes(torrent.downloaded)} / ${formatBytes(torrent.total)}`;
 
   return (
     <Card className="border-accent/35 bg-card/80 shadow-none transition-transform active:scale-[0.99]">
@@ -62,7 +78,9 @@ export function TorrentCard({
                       ? "bg-emerald-500/15 text-emerald-400"
                       : torrent.status === "paused"
                         ? "bg-amber-500/15 text-amber-400"
-                        : ""
+                        : isPromoting
+                          ? "bg-sky-500/15 text-sky-400"
+                          : ""
                 }
               >
                 {statusLabel[torrent.status] ?? torrent.status}
@@ -99,7 +117,7 @@ export function TorrentCard({
               variant="ghost"
               size="icon"
               className="text-muted-foreground hover:text-destructive"
-              disabled={busy}
+              disabled={busy || isPromoting}
               onClick={() => onRemove(torrent.id)}
               aria-label="Remove torrent"
             >
@@ -110,40 +128,51 @@ export function TorrentCard({
 
         <div className="space-y-1.5">
           <div className="flex items-center justify-between font-mono text-xs text-muted-foreground">
-            <span>{formatPercent(torrent.progress)}</span>
-            <span>
-              {formatBytes(torrent.downloaded)} / {formatBytes(torrent.total)}
-            </span>
+            <span>{formatPercent(barProgress)}</span>
+            <span>{bytesLabel}</span>
           </div>
           <Progress value={pct} className="h-2 bg-muted" />
         </div>
 
-        <div className="grid grid-cols-3 gap-2 font-mono text-[11px] text-muted-foreground">
-          <div>
-            <p className="uppercase tracking-wide opacity-70">Down</p>
-            <p className="text-foreground">{formatSpeed(torrent.downloadSpeed)}</p>
-          </div>
-          <div>
-            <p className="uppercase tracking-wide opacity-70">Up</p>
-            <p className="text-foreground">{formatSpeed(torrent.uploadSpeed)}</p>
-          </div>
-          <div>
-            <p className="uppercase tracking-wide opacity-70">ETA · Conn</p>
-            <p className="text-foreground">
-              {formatEta(
-                torrent.downloaded,
-                torrent.total,
-                torrent.downloadSpeed,
-              )}{" "}
-              · {connCount}
-            </p>
-            {torrent.swarmSeeds != null && torrent.swarmLeechers != null ? (
-              <p className="mt-0.5 text-[10px] opacity-80">
-                Swarm {torrent.swarmSeeds}↑ {torrent.swarmLeechers}↓
+        {isPromoting ? (
+          <p className="text-xs text-sky-400/90">
+            Download finished — copying to ReadySHARE. Not ready to watch on the
+            TV until this reaches 100%.
+          </p>
+        ) : null}
+
+        {isRunning ? (
+          <div className="grid grid-cols-3 gap-2 font-mono text-[11px] text-muted-foreground">
+            <div>
+              <p className="uppercase tracking-wide opacity-70">Down</p>
+              <p className="text-foreground">
+                {formatSpeed(torrent.downloadSpeed)}
               </p>
-            ) : null}
+            </div>
+            <div>
+              <p className="uppercase tracking-wide opacity-70">Up</p>
+              <p className="text-foreground">
+                {formatSpeed(torrent.uploadSpeed)}
+              </p>
+            </div>
+            <div>
+              <p className="uppercase tracking-wide opacity-70">ETA · Conn</p>
+              <p className="text-foreground">
+                {formatEta(
+                  torrent.downloaded,
+                  torrent.total,
+                  torrent.downloadSpeed,
+                )}{" "}
+                · {connCount}
+              </p>
+              {torrent.swarmSeeds != null && torrent.swarmLeechers != null ? (
+                <p className="mt-0.5 text-[10px] opacity-80">
+                  Swarm {torrent.swarmSeeds}↑ {torrent.swarmLeechers}↓
+                </p>
+              ) : null}
+            </div>
           </div>
-        </div>
+        ) : null}
 
         {connCount > 0 ? (
           <div className="space-y-1.5 rounded-xl border border-border/80 bg-muted/20 px-3 py-2">
@@ -192,13 +221,17 @@ export function TorrentCard({
         ) : torrent.stagingPath &&
           (torrent.status === "downloading" ||
             torrent.status === "queued" ||
-            torrent.status === "paused") ? (
+            torrent.status === "paused" ||
+            isPromoting) ? (
           <div className="space-y-0.5 font-mono text-[10px] text-muted-foreground">
             <p className="truncate">
               <span className="text-accent">Local</span> {torrent.stagingPath}
             </p>
             <p className="truncate">
-              <span className="opacity-70">Then →</span> {torrent.savePath}
+              <span className={isPromoting ? "text-sky-400" : "opacity-70"}>
+                {isPromoting ? "Copying →" : "Then →"}
+              </span>{" "}
+              {torrent.savePath}
             </p>
           </div>
         ) : (

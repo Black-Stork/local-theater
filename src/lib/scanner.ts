@@ -147,7 +147,9 @@ export function scanDownloadFolders(): ScanResult {
       if (existing) {
         if (
           existing.status === "downloading" ||
-          existing.status === "queued"
+          existing.status === "queued" ||
+          existing.status === "promoting" ||
+          existing.status === "paused"
         ) {
           result.skipped += 1;
           continue;
@@ -213,6 +215,8 @@ export function scanDownloadFolders(): ScanResult {
       if (
         torrent.status === "downloading" ||
         torrent.status === "queued" ||
+        torrent.status === "promoting" ||
+        torrent.status === "paused" ||
         torrent.status === "error"
       ) {
         continue;

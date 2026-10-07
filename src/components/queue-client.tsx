@@ -64,12 +64,24 @@ export function QueueClient({
     }
   }, [refresh]);
 
+  const hasRunning = items.some(
+    (item) =>
+      item.status === "downloading" ||
+      item.status === "queued" ||
+      item.status === "promoting",
+  );
+
   useEffect(() => {
-    const poll = setInterval(() => {
-      void refresh();
-    }, 1000);
+    // Live numbers only move while something is in the swarm; otherwise poll
+    // just often enough to notice a new item from a scan or another device.
+    const poll = setInterval(
+      () => {
+        void refresh();
+      },
+      hasRunning ? 1000 : 15_000,
+    );
     return () => clearInterval(poll);
-  }, [refresh]);
+  }, [hasRunning, refresh]);
 
   async function onRemove(id: string) {
     const confirmed = window.confirm(

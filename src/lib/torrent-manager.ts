@@ -32,7 +32,9 @@ import {
   removeStaging,
   removeTorrentSidecar,
   seedStagingFromSavePath,
+  stagingByteSize,
   writeTorrentSidecar,
+  type PromoteProgress,
 } from "@/lib/staging";
 import { resolveSpeedLimits } from "@/lib/speeds";
 import type { TorrentView } from "@/lib/types";
@@ -70,6 +72,8 @@ class TorrentManager {
   private lastDownloadedBytes = new Map<string, number>();
   private lastDiscoveryKickAt = new Map<string, number>();
   private reconnecting = new Set<string>();
+  private finishing = new Set<string>();
+  private promoteProgress = new Map<string, PromoteProgress>();
 
   private async ensureClient() {
     if (this.client) return this.client;
@@ -120,18 +124,29 @@ class TorrentManager {
   list(): TorrentView[] {
     const categories = new Map(listCategories().map((c) => [c.id, c.name]));
     return listTorrents().map((torrent) => {
-      const swarm = this.swarmStats.get(torrent.id);
-      const connectedPeers = this.peerSnapshots.get(torrent.id) ?? [];
       const live = this.live.has(torrent.id);
-      const peers = live
-        ? connectedPeers.length
-        : connectedPeers.length || torrent.peers;
-      const active =
+      // Finished, imported and paused items are detached from the swarm, so
+      // there is no peer or tracker data to report for them.
+      const inSwarm =
         live ||
         torrent.status === "downloading" ||
-        torrent.status === "queued" ||
-        torrent.status === "paused";
-      const stagingPath = active ? getStagingPath(torrent.id) : null;
+        torrent.status === "queued";
+      const swarm = inSwarm ? this.swarmStats.get(torrent.id) : undefined;
+      const connectedPeers = inSwarm
+        ? (this.peerSnapshots.get(torrent.id) ?? [])
+        : [];
+      const peers = !inSwarm
+        ? 0
+        : live
+          ? connectedPeers.length
+          : connectedPeers.length || torrent.peers;
+      const stagingPath =
+        inSwarm ||
+        torrent.status === "paused" ||
+        torrent.status === "promoting"
+          ? getStagingPath(torrent.id)
+          : null;
+      const promote = this.promoteProgress.get(torrent.id);
       return {
         ...torrent,
         peers,
@@ -140,6 +155,14 @@ class TorrentManager {
         swarmLeechers: swarm?.leechers ?? null,
         connectedPeers,
         stagingPath,
+        promoteBytes:
+          torrent.status === "promoting"
+            ? (promote?.bytes ?? 0)
+            : null,
+        promoteTotal:
+          torrent.status === "promoting"
+            ? (promote?.total ?? torrent.total)
+            : null,
       };
     });
   }
@@ -164,7 +187,13 @@ class TorrentManager {
       const row = getTorrentById(id);
       if (!row || row.status === "paused") return;
 
-      const done = torrent.progress >= 1;
+      // `done` only flips once every piece is verified and written to disk;
+      // `progress` hits 1 earlier, while the last piece is still in flight.
+      if (torrent.done) {
+        this.scheduleFinish(id, torrent);
+        return;
+      }
+
       const connectedPeers = readConnectedPeers(torrent);
       this.peerSnapshots.set(id, connectedPeers);
       const downloadSpeed = torrent.downloadSpeed ?? 0;
@@ -184,12 +213,12 @@ class TorrentManager {
         downloaded,
         total: torrent.length ?? 0,
         peers: connectedPeers.length,
-        status: done ? "done" : "downloading",
+        status: "downloading",
         error: null,
       });
 
       const stalledMs = Date.now() - (this.lastProgressAt.get(id) ?? Date.now());
-      if (!done && downloadSpeed < 8_192) {
+      if (downloadSpeed < 8_192) {
         const lastKick = this.lastDiscoveryKickAt.get(id) ?? 0;
         if (Date.now() - lastKick > 45_000) {
           this.lastDiscoveryKickAt.set(id, Date.now());
@@ -202,11 +231,7 @@ class TorrentManager {
       // Longer grace when peers are connected (choked / hashing / verifying).
       const reconnectAfterMs =
         connectedPeers.length > 0 ? 4 * 60_000 : 2 * 60_000;
-      if (
-        !done &&
-        stalledMs > reconnectAfterMs &&
-        !this.reconnecting.has(id)
-      ) {
+      if (stalledMs > reconnectAfterMs && !this.reconnecting.has(id)) {
         this.lastProgressAt.set(id, Date.now());
         void this.reconnectDownload(id);
       }
@@ -218,25 +243,8 @@ class TorrentManager {
     const timer = setInterval(sync, 1000);
     this.timers.set(id, timer);
 
-    torrent.on("done", async () => {
-      if (!this.live.has(id)) return;
-      const row = getTorrentById(id);
-      if (row) {
-        try {
-          promoteStagingToSavePath(id, row.savePath);
-        } catch (error) {
-          console.error(
-            `[torrent ${id}] promote to save path failed:`,
-            error instanceof Error ? error.message : error,
-          );
-        }
-      }
-      sync();
-      updateTorrent(id, {
-        status: "done",
-        progress: 1,
-        downloadSpeed: 0,
-      });
+    torrent.on("done", () => {
+      this.scheduleFinish(id, torrent);
     });
 
     torrent.on("error", (...args: unknown[]) => {
@@ -268,6 +276,165 @@ class TorrentManager {
     });
     // Metadata may already be ready when wiring a resumed torrent.
     queueMicrotask(() => this.tuneDiscovery(torrent));
+  }
+
+  /**
+   * Deferred so the caller finishes first: a torrent that is already complete
+   * when it is wired would otherwise be marked done before the add/start that
+   * wired it writes its own "downloading" row.
+   */
+  private scheduleFinish(id: string, torrent: TorrentInstance) {
+    queueMicrotask(() => void this.finishDownload(id, torrent));
+  }
+
+  /**
+   * The payload is complete: leave the swarm, then copy staging → ReadySHARE
+   * with visible progress. Only then is the item "done" and safe to watch on
+   * the TV (the NAS path is the one the living room reads).
+   */
+  private async finishDownload(id: string, torrent: TorrentInstance) {
+    if (!this.live.has(id) || this.finishing.has(id)) return;
+    this.finishing.add(id);
+
+    const timer = this.timers.get(id);
+    if (timer) {
+      clearInterval(timer);
+      this.timers.delete(id);
+    }
+    this.live.delete(id);
+
+    try {
+      const row = getTorrentById(id);
+      const total = torrent.length || row?.total || 0;
+      const name = torrent.name || row?.name || "Torrent";
+      const infoHash = torrent.infoHash
+        ? String(torrent.infoHash)
+        : (row?.infoHash ?? null);
+
+      // Release file handles before we rename/copy the staging tree.
+      if (!torrent.destroyed) {
+        await destroyWithTimeout(torrent, false);
+      }
+
+      this.peerSnapshots.delete(id);
+      this.swarmStats.delete(id);
+      this.lastProgressAt.delete(id);
+      this.lastDownloadedBytes.delete(id);
+      this.lastDiscoveryKickAt.delete(id);
+
+      updateTorrent(id, {
+        name,
+        infoHash,
+        status: "promoting",
+        progress: 1,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        downloaded: total || (torrent.downloaded ?? 0),
+        total,
+        peers: 0,
+        error: null,
+      });
+
+      await this.runPromote(id, row?.savePath ?? null, {
+        name,
+        infoHash,
+        total,
+      });
+    } finally {
+      this.finishing.delete(id);
+    }
+  }
+
+  /**
+   * Resume a promote that was interrupted by a process restart. Staging may
+   * still hold the full payload; if it is gone the files are already at the
+   * save path and we just mark the row done.
+   */
+  async resumePromote(id: string) {
+    if (this.finishing.has(id)) return this.get(id)!;
+    const row = getTorrentById(id);
+    if (!row || row.status !== "promoting") {
+      throw new Error("Not promoting");
+    }
+    this.finishing.add(id);
+    try {
+      await this.runPromote(id, row.savePath, {
+        name: row.name,
+        infoHash: row.infoHash,
+        total: row.total,
+      });
+      return this.get(id)!;
+    } finally {
+      this.finishing.delete(id);
+    }
+  }
+
+  private async runPromote(
+    id: string,
+    savePath: string | null,
+    meta: { name: string; infoHash: string | null; total: number },
+  ) {
+    const totalHint = Math.max(meta.total, stagingByteSize(id));
+    this.promoteProgress.set(id, { bytes: 0, total: totalHint });
+
+    let lastWrite = 0;
+    const writeProgress = (progress: PromoteProgress, force = false) => {
+      this.promoteProgress.set(id, progress);
+      const now = Date.now();
+      if (!force && now - lastWrite < 250) return;
+      lastWrite = now;
+      updateTorrent(id, {
+        status: "promoting",
+        progress: 1,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        peers: 0,
+        // Keep download totals; promote bytes live on the in-memory view.
+        downloaded: meta.total || progress.total,
+        total: meta.total || progress.total,
+        error: null,
+      });
+    };
+
+    try {
+      if (savePath) {
+        await promoteStagingToSavePath(id, savePath, (progress) => {
+          writeProgress(progress);
+        });
+      }
+      writeProgress(
+        {
+          bytes: this.promoteProgress.get(id)?.total ?? totalHint,
+          total: this.promoteProgress.get(id)?.total ?? totalHint,
+        },
+        true,
+      );
+      updateTorrent(id, {
+        name: meta.name,
+        infoHash: meta.infoHash,
+        status: "done",
+        progress: 1,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        downloaded: meta.total || totalHint,
+        total: meta.total || totalHint,
+        peers: 0,
+        error: null,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to copy to ReadySHARE";
+      console.error(`[torrent ${id}] promote to save path failed:`, message);
+      updateTorrent(id, {
+        status: "error",
+        error: `Downloaded, but copy to ReadySHARE failed: ${message}`,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        peers: 0,
+      });
+    } finally {
+      this.promoteProgress.delete(id);
+    }
   }
 
   private tuneDiscovery(torrent: TorrentInstance) {
@@ -455,7 +622,11 @@ class TorrentManager {
   async stop(id: string) {
     const row = getTorrentById(id);
     if (!row) throw new Error("Not found");
-    if (row.status === "done" || row.status === "imported") {
+    if (
+      row.status === "done" ||
+      row.status === "imported" ||
+      row.status === "promoting"
+    ) {
       throw new Error("Finished items cannot be stopped");
     }
 
@@ -490,7 +661,11 @@ class TorrentManager {
   async start(id: string) {
     const row = getTorrentById(id);
     if (!row) throw new Error("Not found");
-    if (row.status === "done" || row.status === "imported") {
+    if (
+      row.status === "done" ||
+      row.status === "imported" ||
+      row.status === "promoting"
+    ) {
       throw new Error("Finished items cannot be started");
     }
 
@@ -556,7 +731,14 @@ class TorrentManager {
 
     try {
       const row = getTorrentById(id);
-      if (!row || row.status === "paused" || row.status === "done") return;
+      if (
+        !row ||
+        row.status === "paused" ||
+        row.status === "done" ||
+        row.status === "promoting"
+      ) {
+        return;
+      }
 
       console.log(`[torrent ${id}] stalled with no peers — reconnecting`);
 
@@ -623,6 +805,7 @@ class TorrentManager {
     removeTorrentSidecar(id);
     this.swarmStats.delete(id);
     this.peerSnapshots.delete(id);
+    this.promoteProgress.delete(id);
 
     deleteTorrent(id);
   }
@@ -667,14 +850,23 @@ function removeClientTorrentWithTimeout(
       resolve();
     };
     const timer = setTimeout(finish, ms);
-    try {
-      client.remove(infoHash, { destroyStore: deleteFiles }, () => {
-        clearTimeout(timer);
-        finish();
-      });
-    } catch {
+    const settle = () => {
       clearTimeout(timer);
       finish();
+    };
+    try {
+      // `remove()` rejects when the client no longer tracks this infoHash,
+      // which is the normal case for a torrent that already left the swarm.
+      const result = client.remove(
+        infoHash,
+        { destroyStore: deleteFiles },
+        settle,
+      ) as Promise<void> | void;
+      if (result && typeof result.catch === "function") {
+        result.catch(settle);
+      }
+    } catch {
+      settle();
     }
   });
 }

@@ -229,6 +229,8 @@ export function listCatalog(options?: {
         swarmLeechers: null,
         connectedPeers: [],
         stagingPath: null,
+        promoteBytes: null,
+        promoteTotal: null,
         entryPath,
         kind,
         playable: videos.length > 0,

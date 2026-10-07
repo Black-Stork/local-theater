@@ -22,6 +22,13 @@ export type TorrentView = {
   savePath: string;
   /** Local Mac path while downloading (null when finished / not staging). */
   stagingPath: string | null;
+  /**
+   * Bytes already moved to ReadySHARE while status is `promoting`.
+   * Null when not currently copying.
+   */
+  promoteBytes: number | null;
+  /** Total bytes being moved to ReadySHARE while status is `promoting`. */
+  promoteTotal: number | null;
   magnet: string | null;
   error: string | null;
   createdAt: Date | string;
