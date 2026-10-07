@@ -140,6 +140,8 @@ export function isBenignTorrentWarning(message: string) {
   return (
     lower.includes("no nodes to query") ||
     lower.includes("fetch failed") ||
+    // Announces and web seed requests in flight when the torrent is destroyed.
+    lower.includes("operation was aborted") ||
     lower.includes("http error from xs param") ||
     lower.includes("non-200 status code") ||
     (lower.includes("tracker") && lower.includes("timed out"))
